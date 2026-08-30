@@ -1,0 +1,158 @@
+*emaki.txt*        Read PDFs as one continuously scrolling document
+
+==============================================================================
+CONTENTS                                                      *emaki-contents*
+
+  1. Introduction ......................... |emaki-introduction|
+  2. Requirements ......................... |emaki-requirements|
+  3. Setup ................................ |emaki-setup|
+  4. Mappings ............................. |emaki-mappings|
+  5. Commands ............................. |emaki-commands|
+  6. Configuration ........................ |emaki-configuration|
+  7. Limitations .......................... |emaki-limitations|
+  8. How it works ......................... |emaki-internals|
+
+==============================================================================
+1. INTRODUCTION                                           *emaki-introduction*
+
+An emaki (絵巻) is an illustrated handscroll, read by unrolling it steadily
+from one end to the other.
+
+emaki.nvim renders every page of a PDF as an image and stacks them down a
+single buffer, so ordinary motions scroll the document. Only pages near the
+viewport are rendered; the rest are released.
+
+==============================================================================
+2. REQUIREMENTS                                           *emaki-requirements*
+
+- Neovim 0.10+
+- snacks.nvim with the `image` module enabled
+- A terminal implementing the kitty graphics protocol WITH unicode
+  placeholders: kitty or Ghostty. WezTerm cannot work; see
+  |emaki-limitations|.
+- pdfinfo and pdftotext (poppler-utils)
+- Ghostscript and ImageMagick
+- Under tmux: `set -g allow-passthrough on`
+
+Run `:checkhealth emaki` to verify.
+
+==============================================================================
+3. SETUP                                                         *emaki-setup*
+
+>lua
+    {
+      "KinjiKawaguchi/emaki.nvim",
+      dependencies = {
+        { "folke/snacks.nvim", opts = { image = { enabled = true } } },
+      },
+      opts = {},
+    }
+<
+Opening any .pdf then takes over the buffer.
+
+==============================================================================
+4. MAPPINGS                                                   *emaki-mappings*
+
+Buffer-local, in PDF buffers only.
+
+    ]p / [p        next / previous page
+    ]P / [P        last / first page
+    + / -          zoom in / out
+    =              fit the page to the window width
+    <leader>pg     jump to a page number
+    <leader>pt     extract the text layer into a new tab
+
+Set any entry of `keys` to false to skip it.
+
+==============================================================================
+5. COMMANDS                                                   *emaki-commands*
+
+                                                              *:EmakiInspect*
+:EmakiInspect       Print the measured geometry: terminal, cell size, window
+                    width, paper size, the layout emaki computed and the size
+                    actually rendered. Include this in bug reports about page
+                    sizing.
+
+==============================================================================
+6. CONFIGURATION                                         *emaki-configuration*
+
+Defaults: >lua
+    require("emaki").setup({
+      gap = 2,
+      min_cols = 20,
+      zoom_step = 10,
+      preload_pages = 1,
+      density = 240,
+      patch_snacks_convert = true,
+      keys = {
+        next_page = "]p",
+        prev_page = "[p",
+        last_page = "]P",
+        first_page = "[P",
+        zoom_in = "+",
+        zoom_out = "-",
+        fit_width = "=",
+        goto_page = "<leader>pg",
+        extract_text = "<leader>pt",
+      },
+    })
+<
+                                                *emaki-patch_snacks_convert*
+patch_snacks_convert ~
+
+snacks passes `-trim` when converting a PDF page, cropping it to its ink
+bounding box. That discards the paper aspect ratio emaki derives row counts
+from, and makes page size depend on how much is written on each page.
+
+snacks also rasterises at some DPI and reports that same DPI in the result, so
+its pixels-to-cells conversion cancels out and caps an A4 page near 99 columns
+on every terminal at every font size.
+
+With this option on, emaki rewrites Snacks.image.config.convert.magick.pdf to
+drop the trim and report a lower DPI than it rasterised at. This is global and
+also affects PDFs embedded in documents. Turning it off keeps your arguments
+and gives undersized pages.
+
+==============================================================================
+7. LIMITATIONS                                             *emaki-limitations*
+
+Terminal support ~
+    Images must live in buffer cells to scroll with the text. That needs
+    unicode placeholders, which only kitty and Ghostty implement. Elsewhere
+    snacks draws at a fixed window position, and every stacked page would land
+    on the same spot.
+
+No text selection or search ~
+    The buffer holds blank lines with images laid over them, so `/` matches
+    nothing. Use <leader>pt for the text. A positioned invisible text layer is
+    feasible and is the main missing feature.
+
+No horizontal panning ~
+    The placeholder grid is anchored to a fixed window column, so zoom stops
+    at the window width.
+
+297 cells per page ~
+    snacks encodes an image cell's row and column as combining diacritics on
+    U+10EEEE and only 297 exist. Pages are capped accordingly.
+
+Other ~
+    Scanned PDFs render but have no text to extract. Encrypted PDFs are not
+    supported. Over SSH each page is base64 encoded across the connection;
+    lower `density` if scrolling feels heavy.
+
+==============================================================================
+8. HOW IT WORKS                                             *emaki-internals*
+
+pdfinfo supplies the page count and paper size. Combined with the terminal's
+cell dimensions, each page is assigned a fixed block of buffer lines. The
+buffer is filled with that many blank lines and Snacks.image.placement is asked
+to overlay page n across page n's line range, as extmark virtual text.
+
+Because the image occupies buffer cells rather than screen coordinates, it
+scrolls with the text at no cost. On each scroll, pages leaving the viewport
+are closed and pages entering it are created.
+
+All rendering belongs to snacks.nvim (Apache-2.0, © folke). emaki only decides
+which page belongs on which line.
+
+vim:tw=78:ts=8:noet:ft=help:norl:

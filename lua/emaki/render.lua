@@ -15,6 +15,10 @@ function M.patch_convert()
     return
   end
   patched = true
+  -- Rewriting another plugin's configuration is deliberate here and is the
+  -- documented behaviour of `patch_snacks_convert`; elsewhere Snacks stays
+  -- read-only so accidental mutation is still reported.
+  -- luacheck: push ignore 122
   local convert = Snacks.image.config.convert
   convert.magick = convert.magick or {}
   convert.magick.pdf = {
@@ -31,6 +35,7 @@ function M.patch_convert()
     "-density",
     96,
   }
+  -- luacheck: pop
 end
 
 ---@param session emaki.Session

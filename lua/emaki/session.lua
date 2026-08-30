@@ -205,36 +205,112 @@ local function setup_autocmds(session)
   })
 end
 
+---snacks creates its own placement for the buffer and leaves `inline` unset, so
+---an unconverted image starts a progress spinner on an 80ms timer. Every tick
+---clears the whole snacks namespace, which erases the pages emaki draws.
+---
+---Two details make this awkward to wait out. The timer stops only when the
+---placement reports itself ready, and `close()` makes ready() permanently
+---false — so closing that placement mid-conversion strands the timer for the
+---rest of the session. And when the timer does stop it returns without removing
+---the extmark it drew, so a stale "loading" mark is left behind and its mere
+---presence says nothing about whether the timer is still alive.
+---
+---So test liveness instead: the timer replaces the extmark on every tick, and a
+---new extmark gets a new id. An id that survives a poll interval means the
+---timer has stopped. A cached page never spins at all, which is why restarting
+---Neovim appeared to fix this.
 ---@param buf integer
----@return emaki.Session|nil session, string|nil err
-function M.open(buf)
+---@param done fun()
+local function after_snacks_settles(buf, done)
+  local ns = Snacks.image.placement.ns
+  local POLL_MS = 150
+  local GRACE_MS = 300
+  local LIMIT_MS = 60000
+
+  ---@return integer|nil
+  local function spinner_id()
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })) do
+      for _, chunk in ipairs((mark[4] or {}).virt_text or {}) do
+        if chunk[2] == "SnacksImageLoading" then
+          return mark[1]
+        end
+      end
+    end
+  end
+
+  local uv = vim.uv or vim.loop
+  local timer = assert(uv.new_timer())
+  local waited, last, seen = 0, nil, false
+
+  timer:start(
+    POLL_MS,
+    POLL_MS,
+    vim.schedule_wrap(function()
+      waited = waited + POLL_MS
+      local valid = vim.api.nvim_buf_is_valid(buf)
+      if valid and waited < LIMIT_MS then
+        local id = spinner_id()
+        if id then
+          seen = true
+          -- Still being redrawn; keep waiting.
+          if id ~= last then
+            last = id
+            return
+          end
+        elseif not seen and waited < GRACE_MS then
+          -- Give the spinner a moment to appear before deciding there is none.
+          return
+        end
+      end
+      timer:stop()
+      if not timer:is_closing() then
+        timer:close()
+      end
+      if valid then
+        done()
+      end
+    end)
+  )
+end
+
+---@param buf integer
+---@param on_error fun(err: string)
+function M.open(buf, on_error)
   local file = vim.api.nvim_buf_get_name(buf)
   if sessions[buf] then
-    return sessions[buf]
+    return
   end
   if vim.fn.filereadable(file) == 0 then
-    return nil, "file is not readable"
+    return on_error("file is not readable")
   end
 
   local doc, err = pdf.probe(file)
   if not doc then
-    return nil, err
+    return on_error(err or "could not read the PDF")
   end
 
-  -- Take over the single first-page placement snacks already created.
-  Snacks.image.placement.clean(buf)
-  apply_wo(buf)
+  after_snacks_settles(buf, function()
+    if sessions[buf] or not vim.api.nvim_buf_is_valid(buf) then
+      return
+    end
+    -- Take over the single first-page placement snacks created. Clearing the
+    -- namespace afterwards removes the spinner extmark, which close() leaves
+    -- behind because it is not one of the placement's tracked ids.
+    Snacks.image.placement.clean(buf)
+    vim.api.nvim_buf_clear_namespace(buf, Snacks.image.placement.ns, 0, -1)
+    apply_wo(buf)
 
-  local session = { buf = buf, file = file, doc = doc, placements = {} }
-  session.layout = layout.build(doc, max_cols(buf, doc))
-  sessions[buf] = session
+    local session = { buf = buf, file = file, doc = doc, placements = {} }
+    session.layout = layout.build(doc, max_cols(buf, doc))
+    sessions[buf] = session
 
-  fill(session)
-  setup_autocmds(session)
-  require("emaki.keymaps").apply(buf)
-  render.sync(session)
-  update_winbar(session)
-  return session
+    fill(session)
+    setup_autocmds(session)
+    require("emaki.keymaps").apply(buf)
+    render.sync(session)
+    update_winbar(session)
+  end)
 end
 
 return M

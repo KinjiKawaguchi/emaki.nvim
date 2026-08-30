@@ -28,12 +28,9 @@ function M.attach(buf)
     return
   end
 
-  local session, err = require("emaki.session").open(buf)
-  if not session then
-    vim.notify(("emaki could not open this PDF: %s"):format(err or "unknown error"), vim.log.levels.ERROR, {
-      title = "emaki",
-    })
-  end
+  require("emaki.session").open(buf, function(err)
+    vim.notify(("emaki could not open this PDF: %s"):format(err), vim.log.levels.ERROR, { title = "emaki" })
+  end)
 end
 
 ---@param buf? integer
